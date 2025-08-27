@@ -1,0 +1,85 @@
+stages:
+  - test
+  - build
+  - deploy-dev
+  - deploy-prod
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  IMAGE_NAME: $CI_REGISTRY_IMAGE/shakespeare-app
+  
+before_script:
+  - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+# Test stage
+test:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install -r requirements.txt
+  script:
+    - python -m py_compile app.py
+    - python -c "import app; print('App imports successfully')"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Build Docker image
+build:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  script:
+    - docker build -t $IMAGE_NAME:$CI_COMMIT_SHA .
+    - docker build -t $IMAGE_NAME:latest .
+    - docker push $IMAGE_NAME:$CI_COMMIT_SHA
+    - docker push $IMAGE_NAME:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to development
+deploy-dev:
+  stage: deploy-dev
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - echo "Deploying to development environment"
+    - ./scripts/deploy.sh dev $CI_COMMIT_SHA
+  environment:
+    name: development
+    url: https://shakespeare-dev.example.com
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy to production (manual)
+deploy-prod:
+  stage: deploy-prod
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - echo "Deploying to production environment"
+    - ./scripts/deploy.sh prod $CI_COMMIT_SHA
+  environment:
+    name: production
+    url: https://shakespeare.example.com
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Rollback job (manual)
+rollback-prod:
+  stage: deploy-prod
+  image: alpine:latest
+  script:
+    - echo "Rolling back production deployment"
+    - ./scripts/rollback.sh prod
+  environment:
+    name: production
+    url: https://shakespeare.example.com
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
