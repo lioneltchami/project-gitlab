@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.23"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.11"
+    }
   }
   
   backend "gcs" {
@@ -26,6 +30,14 @@ provider "kubernetes" {
   host                   = "https://${google_container_cluster.primary.endpoint}"
   token                  = data.google_client_config.default.access_token
   cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth.0.cluster_ca_certificate)
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = "https://${google_container_cluster.primary.endpoint}"
+    token                  = data.google_client_config.default.access_token
+    cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth.0.cluster_ca_certificate)
+  }
 }
 
 data "google_client_config" "default" {}
@@ -78,6 +90,19 @@ resource "google_container_cluster" "primary" {
       start_time = "03:00"
     }
   }
+
+  # Enable required addons
+  addons_config {
+    http_load_balancing {
+      disabled = false
+    }
+    horizontal_pod_autoscaling {
+      disabled = false
+    }
+    network_policy_config {
+      disabled = false
+    }
+  }
 }
 
 # Node pool for the GKE cluster
@@ -96,7 +121,7 @@ resource "google_container_node_pool" "primary_nodes" {
     ]
 
     labels = {
-      env = var.project_id
+      env = var.environment
     }
 
     machine_type = "e2-medium"
@@ -112,6 +137,25 @@ resource "google_container_node_pool" "primary_nodes" {
     workload_metadata_config {
       mode = "GKE_METADATA"
     }
+
+    # Security configuration
+    shielded_instance_config {
+      enable_secure_boot          = true
+      enable_integrity_monitoring = true
+    }
+  }
+
+  # Node management
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
+  # Upgrade settings
+  upgrade_settings {
+    strategy         = "SURGE"
+    max_surge        = 1
+    max_unavailable  = 0
   }
 }
 
@@ -137,6 +181,31 @@ resource "google_compute_subnetwork" "subnet" {
     range_name    = "gke-services"
     ip_cidr_range = "10.2.0.0/20"
   }
+
+  # Enable private Google access
+  private_ip_google_access = true
+}
+
+# Firewall rules
+resource "google_compute_firewall" "allow_internal" {
+  name    = "${var.project_name}-allow-internal"
+  network = google_compute_network.vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["0-65535"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["0-65535"]
+  }
+
+  allow {
+    protocol = "icmp"
+  }
+
+  source_ranges = ["10.10.0.0/24", "10.1.0.0/16", "10.2.0.0/20"]
 }
 
 # Service Account for BigQuery access
@@ -166,13 +235,15 @@ resource "google_project_iam_member" "bigquery_user" {
   member  = "serviceAccount:${google_service_account.shakespeare_sa.email}"
 }
 
-# Create service account key
+# Create service account key (fallback for local development)
 resource "google_service_account_key" "shakespeare_key" {
   service_account_id = google_service_account.shakespeare_sa.name
 }
 
 # Kubernetes service account
 resource "kubernetes_service_account" "shakespeare_sa" {
+  depends_on = [google_container_cluster.primary, google_container_node_pool.primary_nodes]
+  
   metadata {
     name      = "shakespeare-sa"
     namespace = "default"
@@ -191,6 +262,8 @@ resource "google_service_account_iam_member" "workload_identity_binding" {
 
 # Secret for service account key (fallback for environments without workload identity)
 resource "kubernetes_secret" "google_cloud_key" {
+  depends_on = [google_container_cluster.primary, google_container_node_pool.primary_nodes]
+  
   metadata {
     name      = "google-cloud-key"
     namespace = "default"
@@ -201,4 +274,113 @@ resource "kubernetes_secret" "google_cloud_key" {
   }
 
   type = "Opaque"
+}
+
+# Install nginx-ingress controller
+resource "helm_release" "nginx_ingress" {
+  depends_on = [google_container_cluster.primary, google_container_node_pool.primary_nodes]
+  
+  name       = "nginx-ingress"
+  repository = "https://kubernetes.github.io/ingress-nginx"
+  chart      = "ingress-nginx"
+  namespace  = "ingress-nginx"
+  version    = "4.8.3"
+
+  create_namespace = true
+
+  values = [
+    yamlencode({
+      controller = {
+        service = {
+          type = "LoadBalancer"
+          annotations = {
+            "cloud.google.com/load-balancer-type" = "External"
+          }
+        }
+        config = {
+          use-proxy-protocol = "false"
+        }
+        metrics = {
+          enabled = true
+        }
+      }
+    })
+  ]
+}
+
+# Install cert-manager for TLS certificates
+resource "helm_release" "cert_manager" {
+  depends_on = [google_container_cluster.primary, google_container_node_pool.primary_nodes]
+  
+  name       = "cert-manager"
+  repository = "https://charts.jetstack.io"
+  chart      = "cert-manager"
+  namespace  = "cert-manager"
+  version    = "v1.13.2"
+
+  create_namespace = true
+
+  set {
+    name  = "installCRDs"
+    value = "true"
+  }
+
+  set {
+    name  = "global.leaderElection.namespace"
+    value = "cert-manager"
+  }
+}
+
+# ClusterIssuer for Let's Encrypt certificates
+resource "kubernetes_manifest" "letsencrypt_issuer" {
+  depends_on = [helm_release.cert_manager]
+  
+  manifest = {
+    apiVersion = "cert-manager.io/v1"
+    kind       = "ClusterIssuer"
+    metadata = {
+      name = "letsencrypt-prod"
+    }
+    spec = {
+      acme = {
+        server = "https://acme-v02.api.letsencrypt.org/directory"
+        email  = var.letsencrypt_email
+        privateKeySecretRef = {
+          name = "letsencrypt-prod"
+        }
+        solvers = [{
+          http01 = {
+            ingress = {
+              class = "nginx"
+            }
+          }
+        }]
+      }
+    }
+  }
+}
+
+# Create namespaces for different environments
+resource "kubernetes_namespace" "shakespeare_dev" {
+  depends_on = [google_container_cluster.primary, google_container_node_pool.primary_nodes]
+  
+  metadata {
+    name = "shakespeare-dev"
+    labels = {
+      name        = "shakespeare-dev"
+      environment = "development"
+    }
+  }
+}
+
+resource "kubernetes_namespace" "shakespeare_prod" {
+  depends_on = [google_container_cluster.primary, google_container_node_pool.primary_nodes]
+  
+  metadata {
+    name = "shakespeare-prod"
+    labels = {
+      name        = "shakespeare-prod"
+      environment = "production"
+    }
+  }
 }

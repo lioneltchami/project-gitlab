@@ -1,10 +1,10 @@
 import os
-from flask import Flask  
+from flask import Flask
 from google.cloud import bigquery
 from tabulate import tabulate
-import logging 
+import logging
 
-logging.basicConfig(level=logging.INFO) # info | warning p3 | error p2 | critical p1
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -16,10 +16,8 @@ except Exception as e:
     logger.error(f"Failed to initialize BigQuery client: {e}")
     client = None
 
-
-WORD = os.environ.get("WORD", "the", "AND", "tea", "COFFEE")
+WORD = os.environ.get("WORD", "the").lower()
 logger.info(f"Configured to search for word: '{WORD}'")
-
 
 QUERY = f"""SELECT
     corpus,
@@ -40,7 +38,7 @@ def health():
 def index():
     """Main endpoint to display word count results"""
     if client is None:
-        return "<h4>Service Unavailable</h4><p>BigQuery client not available</p>", 503 # len(results)
+        return "<h4>Service Unavailable</h4><p>BigQuery client not available</p>", 503
     
     try:
         logger.info(f"Executing query for word: '{WORD}'")

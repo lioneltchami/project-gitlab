@@ -1,0 +1,17 @@
+apiVersion: v2
+name: shakespeare
+description: A Helm chart for Shakespeare word analysis application
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - shakespeare
+  - bigquery
+  - flask
+  - word-analysis
+home: https://github.com/unizin/platform-sre-code-test
+sources:
+  - https://github.com/unizin/platform-sre-code-test
+maintainers:
+  - name: Platform Engineering Team
+    email: platform.engineer.hiring@unizin.org

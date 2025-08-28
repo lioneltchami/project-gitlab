@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-# Deployment script for Shakespeare app
 ENVIRONMENT=$1
 IMAGE_TAG=$2
 NAMESPACE="shakespeare-${ENVIRONMENT}"
@@ -13,16 +12,15 @@ fi
 
 echo "Deploying Shakespeare app to $ENVIRONMENT with tag $IMAGE_TAG"
 
-# Set environment-specific configurations
 case $ENVIRONMENT in
     "dev")
         REPLICAS=1
-        WORDS=("the" "COFFEE")
+        WORDS=("the" "coffee")
         DOMAIN="shakespeare-dev.example.com"
         ;;
     "prod")
         REPLICAS=2
-        WORDS=("the" "COFFEE" "AND" "tea")
+        WORDS=("the" "coffee" "and" "tea")
         DOMAIN="shakespeare.example.com"
         ;;
     *)
@@ -31,14 +29,11 @@ case $ENVIRONMENT in
         ;;
 esac
 
-# Create namespace if it doesn't exist
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-# Deploy each word instance
 for WORD in "${WORDS[@]}"; do
     echo "Deploying instance for word: $WORD"
     
-    # Generate deployment manifest
     cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
@@ -75,6 +70,8 @@ spec:
           value: "5000"
         - name: FLASK_ENV
           value: "production"
+        - name: GOOGLE_CLOUD_PROJECT
+          value: "$GOOGLE_CLOUD_PROJECT"
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: "/var/secrets/google/service-account.json"
         volumeMounts:
@@ -125,7 +122,32 @@ EOF
 
 done
 
-# Create ingress with routing for your specific words
+generate_ingress_paths() {
+    local paths=""
+    
+    paths+="      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: shakespeare-the-service
+            port:
+              number: 80"
+    
+    for WORD in "${WORDS[@]}"; do
+        paths+="
+      - path: /$WORD/
+        pathType: Prefix
+        backend:
+          service:
+            name: shakespeare-$WORD-service
+            port:
+              number: 80"
+    done
+    
+    echo "$paths"
+}
+
+echo "Creating ingress for environment: $ENVIRONMENT with words: ${WORDS[*]}"
 cat <<EOF | kubectl apply -f -
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -135,7 +157,6 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
   tls:
   - hosts:
@@ -145,76 +166,38 @@ spec:
   - host: $DOMAIN
     http:
       paths:
-      - path: /the/?(.*)
-        pathType: Prefix
-        backend:
-          service:
-            name: shakespeare-the-service
-            port:
-              number: 80
-      - path: /(coffee|COFFEE)/?(.*)
-        pathType: Prefix
-        backend:
-          service:
-            name: shakespeare-COFFEE-service
-            port:
-              number: 80
-      - path: /(and|AND)/?(.*)
-        pathType: Prefix
-        backend:
-          service:
-            name: shakespeare-AND-service
-            port:
-              number: 80
-      - path: /tea/?(.*)
-        pathType: Prefix
-        backend:
-          service:
-            name: shakespeare-tea-service
-            port:
-              number: 80
-      - path: /?(.*)
-        pathType: Prefix
-        backend:
-          service:
-            name: shakespeare-the-service
-            port:
-              number: 80
+$(generate_ingress_paths)
 EOF
 
 echo "Deployment completed successfully!"
 echo "Application will be available at: https://$DOMAIN"
 
-# Display access URLs
 echo ""
-echo "🔗 Access URLs:"
+echo "Access URLs for $ENVIRONMENT environment:"
 echo "   Main (the):     https://$DOMAIN/"
-echo "   The:            https://$DOMAIN/the/"
-echo "   Coffee:         https://$DOMAIN/coffee/ or https://$DOMAIN/COFFEE/"
-echo "   And:            https://$DOMAIN/and/ or https://$DOMAIN/AND/"
-echo "   Tea:            https://$DOMAIN/tea/"
+for WORD in "${WORDS[@]}"; do
+    echo "   $WORD:            https://$DOMAIN/$WORD/"
+done
 echo ""
 
-# Wait for rollout to complete
-echo "⏳ Waiting for deployments to be ready..."
+echo "Waiting for deployments to be ready..."
 for WORD in "${WORDS[@]}"; do
     echo "Checking rollout status for: $WORD"
     kubectl rollout status deployment/shakespeare-$WORD -n $NAMESPACE --timeout=300s
 done
 
-echo "✅ All deployments are ready!"
+echo "All deployments are ready!"
 
-# Verify health of all services
 echo ""
-echo "🏥 Checking service health..."
+echo "Checking service health..."
 for WORD in "${WORDS[@]}"; do
     echo -n "Checking shakespeare-$WORD-service: "
     if kubectl get service shakespeare-$WORD-service -n $NAMESPACE >/dev/null 2>&1; then
-        echo "✅ Service running"
+        echo "Service running"
     else
-        echo "❌ Service not found"
+        echo "Service not found"
     fi
 done
 
 echo ""
-echo "🎉 Deployment complete! Your Shakespeare app is ready."
+echo "Deployment complete! Your Shakespeare app is ready."

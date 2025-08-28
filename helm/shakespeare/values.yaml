@@ -1,21 +1,19 @@
-# Default values for shakespeare app
 replicaCount: 2
 
 image:
-  repository: gcr.io/shakespeare/shakespeare-app
+  repository: gcr.io/your-project/shakespeare-app
   pullPolicy: IfNotPresent
   tag: "latest"
 
-# Multiple word instances configuration
 instances:
   - name: "the"
     word: "the"
     replicas: 3
-  - name: "COFFEE"
-    word: "COFFEE"
+  - name: "coffee"
+    word: "coffee"
     replicas: 2
-  - name: "AND"
-    word: "AND"
+  - name: "and"
+    word: "and"
     replicas: 2
   - name: "tea"
     word: "tea"
@@ -62,16 +60,10 @@ ingress:
           backend: "the"
         - path: /coffee
           pathType: Prefix
-          backend: "COFFEE"
-        - path: /COFFEE
-          pathType: Prefix
-          backend: "COFFEE"
+          backend: "coffee"
         - path: /and
           pathType: Prefix
-          backend: "AND"
-        - path: /AND
-          pathType: Prefix
-          backend: "AND"
+          backend: "and"
         - path: /tea
           pathType: Prefix
           backend: "tea"
@@ -101,7 +93,6 @@ tolerations: []
 
 affinity: {}
 
-# Health checks
 livenessProbe:
   httpGet:
     path: /health
@@ -116,7 +107,6 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 5
 
-# Environment variables
 env:
   - name: FLASK_ENV
     value: "production"
@@ -125,13 +115,13 @@ env:
   - name: GOOGLE_APPLICATION_CREDENTIALS
     value: "/var/secrets/google/service-account.json"
 
-# Secret configuration
+googleCloudProject: "your-gcp-project-id"
+
 secret:
   enabled: true
   name: "google-cloud-key"
   mountPath: "/var/secrets/google"
 
-# Monitoring and observability
 monitoring:
   enabled: true
   serviceMonitor:
@@ -139,7 +129,6 @@ monitoring:
     path: /metrics
     interval: 30s
 
-# Pod disruption budget
 podDisruptionBudget:
   enabled: true
   minAvailable: 1

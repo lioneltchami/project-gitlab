@@ -1,0 +1,26 @@
+# Shakespeare App Environment Configuration
+
+# Google Cloud Configuration
+GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+GOOGLE_APPLICATION_CREDENTIALS=./credentials/service-account.json
+
+# Application Configuration  
+WORD=the
+# Available options: the, coffee, and, tea
+# Note: 'the' and 'and' will return results from Shakespeare
+# Note: 'coffee' and 'tea' may return zero results (anachronistic words)
+
+# Flask Configuration
+FLASK_ENV=development
+PORT=5000
+
+# Docker Configuration
+DOCKER_REGISTRY=gcr.io
+IMAGE_TAG=latest
+
+# Kubernetes Configuration
+NAMESPACE=shakespeare-dev
+REPLICAS=1
+
+# Domain Configuration (for production)
+DOMAIN=shakespeare-dev.example.com
